@@ -1,0 +1,14 @@
+Horst Tech Non‑Commercial Software License
+Copyright © 2026 Horst Tech LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to use, copy, modify, and merge the Software for personal, academic, or other non‑commercial purposes, including internal use within for‑profit organizations, subject to the following conditions:
+
+All copies or substantial portions of the Software must include the above copyright notice and this permission notice.
+
+The Software, or any derivative work based on the Software, may not be used in, or as part of, any product or service that is sold, licensed, or otherwise provided to third parties for a fee, subscription, or other monetary or commercial consideration.
+
+The Software, or any derivative work based on the Software, may not be distributed, sublicensed, or otherwise made available to third parties for profit or other commercial gain without the prior written consent of Horst Tech LLC.
+
+No patent rights, trademark rights, or other intellectual property rights are transferred, licensed, or implied by making the Software publicly available.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THIS SOFTWARE.
