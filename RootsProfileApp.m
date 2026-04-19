@@ -15,7 +15,12 @@
 
 
 classdef RootsProfileApp < matlab.apps.AppBase
-
+    properties (Constant)
+        VERSION = "0.2.0"
+        VERSION_DATE = "2026-04-19"
+        APP_NAME = "Roots Profile Designer"
+        APP_VENDOR = "Horst Tech LLC"
+    end
     % =====================================================================
     %  PROPERTIES
     % =====================================================================
@@ -529,7 +534,10 @@ classdef RootsProfileApp < matlab.apps.AppBase
             % ---- Figure ------------------------------------------------
             app.UIFigure = uifigure('Visible','off');
             app.UIFigure.Position = [60 60 1460 870];
-            app.UIFigure.Name = 'Roots Profile Designer  —  Horst Tech LLC';
+            app.UIFigure.Name = sprintf('%s  v%s  —  %s', ...
+                RootsProfileApp.APP_NAME, ...
+                 RootsProfileApp.VERSION, ...
+                RootsProfileApp.APP_VENDOR);
             app.UIFigure.Color = [0.96 0.96 0.97];
 
             % ---- Main grid: [left panel | right plots] ------------------
