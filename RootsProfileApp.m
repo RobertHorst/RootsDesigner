@@ -16,8 +16,8 @@
 
 classdef RootsProfileApp < matlab.apps.AppBase
     properties (Constant)
-        VERSION = "0.2.0"
-        VERSION_DATE = "2026-04-19"
+        VERSION = "0.3.0"
+        VERSION_DATE = "2026-07-17"
         APP_NAME = "Roots Profile Designer"
         APP_VENDOR = "Horst Tech LLC"
     end
@@ -49,7 +49,7 @@ classdef RootsProfileApp < matlab.apps.AppBase
         ComputeButton
         ExportSplineBtn
         StatusLabel
-        ResultLabels            % 11x2 cell of {nameLabel, valueLabel}
+        ResultLabels            % 12x2 cell of {nameLabel, valueLabel}
 
         % --- Batch tab ---
         BatchInputTable
@@ -104,7 +104,7 @@ classdef RootsProfileApp < matlab.apps.AppBase
                 app.BatchInputTable.ColumnName{7} = 'ss';
                 app.LoadDefaultsBtn.Enable = 'on';
             end
-            for k = 1:11
+            for k = 1:12
                 app.ResultLabels{k,2}.Text = char(8212);
             end
             % Clear batch data to avoid misinterpreting column 6
@@ -148,7 +148,7 @@ classdef RootsProfileApp < matlab.apps.AppBase
                     ss = app.SSField.Value;
                 end
 
-                [lr,lrn,lw,sd,ae,cl,cn,mg,ag,lb,xy,~] = ...
+                [lr,lrn,lw,sd,ae,cl,cn,mg,ag,lb,mad,xy,~] = ...
                     rootsCompute(nodes,ex,offset,rotor_H,sgap,ss,pts);
 
                 app.LastXY    = xy;
@@ -168,9 +168,10 @@ classdef RootsProfileApp < matlab.apps.AppBase
                     sprintf('%.3f',    lb); ...
                     sprintf('%.2f mm', mg); ...
                     sprintf('%.2f mm', ag); ...
+                    sprintf('%.3f%s',  mad, char(176)); ...
                     sprintf('%.2f %s', fl, units); ...
                     sprintf('%.2f %s', fn, units)};
-                for k = 1:11
+                for k = 1:12
                     app.ResultLabels{k,2}.Text = vals{k};
                 end
 
@@ -328,7 +329,7 @@ classdef RootsProfileApp < matlab.apps.AppBase
             numData = cell2mat(cellData(:,2:8));    % columns 2-8 are params
             units   = app.UnitsDropDown.Value;
             isSD    = app.SDRadioBtn.Value;
-            resData = zeros(nRows, 11);
+            resData = zeros(nRows, 12);
             app.BatchXYCache   = cell(nRows,1);
             app.BatchNodeCache = zeros(nRows,1);
             app.BatchSSCache   = zeros(nRows,1);
@@ -364,11 +365,11 @@ classdef RootsProfileApp < matlab.apps.AppBase
                     else
                         shaft = col6;
                     end
-                    [lr,lrn,lw,sd,ae,cl,cn,mg,ag,lb,xy,~] = ...
+                    [lr,lrn,lw,sd,ae,cl,cn,mg,ag,lb,mad,xy,~] = ...
                         rootsCompute(nd,ex,gs,rh,sg,shaft,pt);
                     fl = flowConvertLocal(cl, units);
                     fn = flowConvertLocal(cn, units);
-                    resData(i,:) = [shaft,lr,lrn,lw,sd,ae,fl,fn,mg,ag,lb];
+                    resData(i,:) = [shaft,lr,lrn,lw,sd,ae,fl,fn,mg,ag,mad,lb];
                     app.BatchXYCache{i}   = xy;
                     app.BatchNodeCache(i) = nd;
                     app.BatchSSCache(i)   = shaft;
@@ -501,7 +502,7 @@ classdef RootsProfileApp < matlab.apps.AppBase
             headers = {'Lobes','ex','offset','rotor_H','shellgap',col6hdr, ...
                 'points','ss','lobe_rmax','lobe_rmin','lobe_w','shell_d', ...
                 'area_eff',[units '_loss'],[units '_net'], ...
-                'min_gap','avg_gap','lambda'};
+                'min_gap','avg_gap','max_angle_dev_deg','lambda'};
             numInput = cell2mat(cellData(:,2:8));   % skip Plot? column
             T = array2table([numInput, rd], 'VariableNames', headers);
             writetable(T, fullfile(path,file));
@@ -676,20 +677,20 @@ classdef RootsProfileApp < matlab.apps.AppBase
             app.StatusLabel = uilabel(br,'Text','','FontColor',[0.4 0.4 0.4]);
             app.StatusLabel.Layout.Column = 3;
 
-            % -- Results panel (11 rows) --
+            % -- Results panel (12 rows) --
             rp = uipanel(ig,'Title','Results','FontWeight','bold');
             rp.Layout.Row = 3;
-            rg = uigridlayout(rp,[11 2]);
+            rg = uigridlayout(rp,[12 2]);
             rg.ColumnWidth = {140,'1x'};
-            rg.RowHeight = repmat({20},1,11);
+            rg.RowHeight = repmat({20},1,12);
             rg.Padding = [8 4 8 4];
             rg.RowSpacing = 2;
 
             rnames = {'Shaft Spacing','Lobe Rmax','Lobe Rmin','Lobe Width', ...
                 'Shell Diameter','Area Efficiency','Lambda', ...
-                'Min Gap','Avg Gap','Flow Loss','Flow Net'};
-            app.ResultLabels = cell(11,2);
-            for k = 1:11
+                'Min Gap','Avg Gap','Max Angle Dev','Flow Loss','Flow Net'};
+            app.ResultLabels = cell(12,2);
+            for k = 1:12
                 app.ResultLabels{k,1} = uilabel(rg,'Text',rnames{k}, ...
                     'FontColor',[0.35 0.35 0.35]);
                 app.ResultLabels{k,1}.Layout.Row = k;
@@ -763,8 +764,9 @@ classdef RootsProfileApp < matlab.apps.AppBase
             app.BatchResultsTable.Layout.Row = 3;
             app.BatchResultsTable.ColumnName = ...
                 {'SS','Rmax','Rmin','Width','Shell_D','Area_Eff', ...
-                 'Flow_Loss','Flow_Net','Min_Gap','Avg_Gap','Lambda'};
-            app.BatchResultsTable.ColumnEditable = false(1,11);
+                 'Flow_Loss','Flow_Net','Min_Gap','Avg_Gap', ...
+                 'Max_Angle_Dev','Lambda'};
+            app.BatchResultsTable.ColumnEditable = false(1,12);
             app.BatchResultsTable.Data = [];
             app.BatchResultsTable.CellSelectionCallback = ...
                 @(~,ev) batchResultClicked(app,ev);
@@ -873,13 +875,14 @@ function rotated_points = rotateShiftLocal(points, angle_degrees, displacement)
     end
 end
 
-function [min_gap, avg_gap, gaparray] = findMinGapLocal(xyarray, nodes, ss)
+function [min_gap, avg_gap, gaparray, ang_at_min] = findMinGapLocal(xyarray, nodes, ss)
     % Sweep 360 degree positions and find minimum/average clearance
     starta = 0;
     startb = 180 + 180/nodes;
-    min_gap   = inf;
-    gap_accum = 0;
-    gaparray  = zeros(360, 2);
+    min_gap    = inf;
+    ang_at_min = 0;
+    gap_accum  = 0;
+    gaparray   = zeros(360, 2);
 
     for i = 1:360
         ang = i - 1;
@@ -897,6 +900,7 @@ function [min_gap, avg_gap, gaparray] = findMinGapLocal(xyarray, nodes, ss)
         current_min = min(dist_matrix(:));
         if current_min < min_gap
             min_gap = current_min;
+            ang_at_min = ang;
         end
         gaparray(i,:) = [i, current_min];
         gap_accum = gap_accum + current_min;
@@ -904,8 +908,76 @@ function [min_gap, avg_gap, gaparray] = findMinGapLocal(xyarray, nodes, ss)
     avg_gap = gap_accum / 360;
 end
 
+function gap = pairGapLocal(xyarray, theta1, theta2, ss)
+    % Clearance (signed: negative = overlap) between rotor1 held at theta1
+    % and rotor2 held at theta2, using the same distance/overlap test as
+    % findMinGapLocal.
+    rotor1 = rotateShiftLocal(xyarray, theta1, [-ss/2, 0]);
+    rotor2 = rotateShiftLocal(xyarray, theta2, [ ss/2, 0]);
+
+    in = inpolygon(rotor2(:,1), rotor2(:,2), rotor1(:,1), rotor1(:,2));
+
+    dx = rotor1(:,1) - rotor2(:,1).';
+    dy = rotor1(:,2) - rotor2(:,2).';
+    dist_matrix = sqrt(dx.^2 + dy.^2);
+    dist_matrix(:, in) = -dist_matrix(:, in);
+
+    gap = min(dist_matrix(:));
+end
+
+function dev = crossingAngleLocal(xyarray, theta1, theta2_0, ss, dir, max_search)
+    % Bisection for the smallest deviation angle (0..max_search) by which
+    % rotor2 can be turned away from theta2_0, with rotor1 held fixed at
+    % theta1, before the gap first reaches zero (interference).
+    tol = 1e-3;
+    lo = 0;
+    hi = max_search;
+    gap_hi = pairGapLocal(xyarray, theta1, theta2_0 + dir*hi, ss);
+    if gap_hi > 0
+        % No interference within a half lobe pitch of deviation.
+        dev = max_search;
+        return;
+    end
+    while (hi - lo) > tol
+        mid = (lo + hi) / 2;
+        if pairGapLocal(xyarray, theta1, theta2_0 + dir*mid, ss) > 0
+            lo = mid;
+        else
+            hi = mid;
+        end
+    end
+    dev = (lo + hi) / 2;
+end
+
+function max_dev = findMaxAngleDeviationLocal(xyarray, nodes, ss, ang)
+    % At the given synchronized-sweep rotation angle, hold rotor1 fixed and
+    % find the smallest single-rotor rotation deviation of rotor2 — in
+    % either direction — that closes the gap to zero. This is the angular
+    % play (e.g. timing-gear backlash or torsional deflection) the
+    % mechanism can tolerate at this position before the rotors interfere.
+    starta = 0;
+    startb = 180 + 180/nodes;
+    theta1   = starta + ang;
+    theta2_0 = startb - ang;
+
+    max_search = 180 / nodes;      % one half lobe pitch
+    dev_pos = crossingAngleLocal(xyarray, theta1, theta2_0, ss, +1, max_search);
+    dev_neg = crossingAngleLocal(xyarray, theta1, theta2_0, ss, -1, max_search);
+    max_dev = min(dev_pos, dev_neg);
+end
+
+function ang_refined = refineMinGapAngleLocal(xyarray, nodes, ss, ang_coarse)
+    % Golden-section refine of the 1-degree-resolution minimum-gap angle
+    % found by findMinGapLocal, searching the synchronized sweep motion
+    % (both rotors turning together) in a +/-1 degree window.
+    starta = 0;
+    startb = 180 + 180/nodes;
+    f = @(a) pairGapLocal(xyarray, starta + a, startb - a, ss);
+    ang_refined = fminbnd(f, ang_coarse - 1, ang_coarse + 1);
+end
+
 function [lobe_rmax, lobe_rmin, lobe_w, shell_d, area_eff, ...
-          CFM_loss, CFM_net, min_gap, avg_gap, lamb, xy, gear_xy] = ...
+          CFM_loss, CFM_net, min_gap, avg_gap, lamb, max_angle_dev, xy, gear_xy] = ...
           rootsCompute(nodes, ex, offset, rotor_H, shellgap, ss, points)
     % Core Roots profile computation (no plotting).
     % Returns geometry, efficiency, flow and profile arrays.
@@ -1013,7 +1085,11 @@ function [lobe_rmax, lobe_rmin, lobe_w, shell_d, area_eff, ...
     vol_in3   = vol_mm3 / (25.4^3);
     vol_cuft  = 2 * vol_in3 / (12^3);              % 2x for both rotors
 
-    [min_gap, avg_gap, ~] = findMinGapLocal(xyarray, nodes, ss);
+    [min_gap, avg_gap, ~, ang_at_min] = findMinGapLocal(xyarray, nodes, ss);
+
+    % --- Max angle deviation before interference at the tightest gap ---
+    ang_refined    = refineMinGapAngleLocal(xyarray, nodes, ss, ang_at_min);
+    max_angle_dev  = findMaxAngleDeviationLocal(xyarray, nodes, ss, ang_refined);
 
     gap_area      = avg_gap * 2 * pi * ((lobe_rmax + lobe_rmin) / 2);
     vol_loss_mm3  = gap_area * rotor_H;

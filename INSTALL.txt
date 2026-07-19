@@ -1,0 +1,172 @@
+ROOTS PROFILE DESIGNER (Python / PySide6 version)
+Install & Run Instructions
+===================================================
+
+This is the Python port of the RootsProfileApp.m MATLAB app. It needs a
+reasonably modern Python (3.9 or newer) plus four packages: numpy, scipy,
+matplotlib, and PySide6.
+
+If this machine already has an old copy of Python lying around (very
+common with an old Anaconda/Miniconda install, or the Mac's built-in
+system Python), the steps below are written to sidestep it entirely by
+building a fresh, isolated environment. You do not need to uninstall
+anything or touch existing Python installs to do this.
+
+
+QUICK START (macOS, already have a modern Python)
+---------------------------------------------------
+If you already know this machine has Python 3.9+ available, skip to
+STEP 3 below.
+
+
+STEP 1 — Check what Python versions already exist
+---------------------------------------------------
+Open Terminal (macOS/Linux) or Command Prompt (Windows) and run:
+
+    macOS/Linux:
+        which -a python3
+        ls /Library/Frameworks/Python.framework/Versions/  2>/dev/null
+        brew --version   (only if Homebrew is installed)
+
+    Windows:
+        where python
+        py -0
+
+Look for a Python 3.9 or newer. Common good signs:
+  - A path containing "Python.framework/Versions/3.11" or "3.12" (a
+    python.org install)
+  - A path containing "/opt/homebrew" or "/usr/local/Cellar" (a Homebrew
+    install)
+
+AVOID using any python3 whose path contains "anaconda" or "miniconda" —
+old Anaconda installs frequently pin Python at 3.6 or older, which is
+too old for current matplotlib/PySide6 and cannot be fixed with
+"pip install --upgrade" (pip will just report "already satisfied"
+because nothing newer is even compatible with that old Python).
+
+
+STEP 2 — Install a modern Python, if needed
+---------------------------------------------------
+If Step 1 found nothing 3.9+, install one:
+
+    macOS: download the installer (3.11 or 3.12, "macOS 64-bit
+    universal2 installer") from:
+        https://www.python.org/downloads/
+    Or, if Homebrew is available:
+        brew install python@3.12
+
+    Windows: download and run the installer from:
+        https://www.python.org/downloads/windows/
+    IMPORTANT: check "Add python.exe to PATH" during install.
+
+    Linux: use your distro's package manager, e.g.:
+        sudo apt install python3.12 python3.12-venv
+
+
+STEP 3 — Create an isolated virtual environment
+---------------------------------------------------
+This keeps the app's packages separate from anything else on the
+machine, so nothing else gets broken and nothing else can break this.
+
+    macOS (python.org install, adjust version number as needed):
+        /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 -m venv ~/roots_venv
+        source ~/roots_venv/bin/activate
+
+    macOS (Homebrew install):
+        /opt/homebrew/bin/python3.12 -m venv ~/roots_venv
+        source ~/roots_venv/bin/activate
+
+    Linux:
+        python3.12 -m venv ~/roots_venv
+        source ~/roots_venv/bin/activate
+
+    Windows (Command Prompt):
+        py -3.12 -m venv %USERPROFILE%\roots_venv
+        %USERPROFILE%\roots_venv\Scripts\activate
+
+After activating, your terminal prompt should show "(roots_venv)" at
+the start of the line. If it doesn't, the activation step failed —
+re-run the "activate" command above and check for errors.
+
+
+STEP 4 — Install the required packages
+---------------------------------------------------
+With the environment active (prompt shows "(roots_venv)"):
+
+    pip install --upgrade pip
+    pip install numpy scipy matplotlib PySide6
+
+This should take a minute or two. PySide6 is the largest download
+(around 50-100 MB).
+
+
+STEP 5 — Run the app
+---------------------------------------------------
+Still with the environment active:
+
+    macOS/Linux:
+        cd "/path/to/RootsDesigner"
+        python3 roots_app_qt.py
+
+    Windows:
+        cd "C:\path\to\RootsDesigner"
+        python roots_app_qt.py
+
+The app window should open within a few seconds.
+
+
+EVERY TIME AFTER THE FIRST INSTALL
+---------------------------------------------------
+You don't need to repeat Steps 1-4. Each new terminal session, just:
+
+    macOS/Linux:
+        source ~/roots_venv/bin/activate
+        cd "/path/to/RootsDesigner"
+        python3 roots_app_qt.py
+
+    Windows:
+        %USERPROFILE%\roots_venv\Scripts\activate
+        cd "C:\path\to\RootsDesigner"
+        python roots_app_qt.py
+
+
+TROUBLESHOOTING
+---------------------------------------------------
+
+"ModuleNotFoundError: No module named 'matplotlib.backends.backend_qtagg'"
+  matplotlib is older than version 3.5. This shouldn't happen if you
+  installed into a fresh venv per Step 4, but if it does, confirm the
+  version with:
+      python3 -c "import matplotlib; print(matplotlib.__version__)"
+  It should read 3.5 or higher. If it's older, you are probably not
+  inside the activated venv — check that your prompt shows
+  "(roots_venv)", then re-run:
+      pip install --upgrade matplotlib
+
+"pip install --upgrade matplotlib" reports "already satisfied" but the
+version is old (e.g. 3.3.x)
+  This means pip is not running inside your new venv — it's still
+  pointing at an old system/Anaconda Python that caps matplotlib at an
+  old version because it's not compatible with anything newer. Run:
+      which python3      (macOS/Linux)
+      where python        (Windows)
+  The path shown should be inside your roots_venv folder. If it isn't,
+  re-run the "activate" command from Step 3 in this same terminal
+  window before installing anything.
+
+conda "UnsatisfiableError" when trying to create an environment
+  Don't use conda for this app — an old Anaconda/Miniconda install
+  often has a broken or ancient package index that conda can't resolve
+  around. Use the plain "venv" method in Step 3 instead; it does not
+  involve conda at all.
+
+App window opens but plots look broken, or the app crashes with a Qt
+platform plugin error
+  Make sure PySide6 installed cleanly with no errors during Step 4.
+  Try reinstalling just that package:
+      pip install --force-reinstall PySide6
+
+To confirm everything installed correctly, run this inside the
+activated venv:
+      python3 -c "import numpy, scipy, matplotlib, PySide6; print('matplotlib', matplotlib.__version__); print('PySide6', PySide6.__version__)"
+  matplotlib should report 3.5.0 or higher.
