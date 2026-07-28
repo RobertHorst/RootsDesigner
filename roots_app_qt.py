@@ -14,17 +14,24 @@ Copyright 2026, Robert Horst, Horst Tech LLC
 """
 
 import csv
+import importlib.util
+import os
 import sys
 
-import numpy as np
+# On Windows, PySide6's bundled Qt DLLs aren't found via PATH alone — register
+# the package directory as a DLL search path before importing any PySide6
+# submodules. No-op on macOS/Linux, where this isn't needed.
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    try:
+        spec = importlib.util.find_spec("PySide6")
+        if spec and spec.origin:
+            pyside_dir = os.path.dirname(spec.origin)
+            if os.path.exists(pyside_dir):
+                os.add_dll_directory(pyside_dir)
+    except Exception:
+        pass
 
-try:
-    # matplotlib >= 3.5: unified Qt backend (works with PySide6/PyQt6/PySide2/PyQt5)
-    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-except ImportError:
-    # matplotlib < 3.5: only the Qt5-named backend module exists
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
+import PySide6  # noqa: F401 — import top-level package before submodules
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -52,14 +59,25 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from scipy.optimize import brentq
 
+os.environ.setdefault("QT_API", "pyside6")
+
+import numpy as np
+from matplotlib.figure import Figure
+try:
+    # matplotlib >= 3.5: unified Qt backend (works with PySide6/PyQt6/PySide2/PyQt5)
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+except ImportError:
+    # matplotlib < 3.5: only the Qt5-named backend module exists
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+
+from scipy.optimize import brentq
 from roots_profile import flow_convert, lobe_rmax_from_ss, roots_compute, rotate_shift
 
 APP_NAME = "Roots Profile Designer"
 APP_VENDOR = "Horst Tech LLC"
-VERSION = "0.3.0"
-VERSION_DATE = "2026-07-17"
+VERSION = "0.3.1"
+VERSION_DATE = "2026-07-27"
 
 RESULT_NAMES = [
     "Shaft Spacing", "Lobe Rmax", "Lobe Rmin", "Lobe Width",
