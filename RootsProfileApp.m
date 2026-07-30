@@ -16,8 +16,8 @@
 
 classdef RootsProfileApp < matlab.apps.AppBase
     properties (Constant)
-        VERSION = "0.3.0"
-        VERSION_DATE = "2026-07-17"
+        VERSION = "0.3.2"
+        VERSION_DATE = "2026-07-30"
         APP_NAME = "Roots Profile Designer"
         APP_VENDOR = "Horst Tech LLC"
     end
@@ -929,15 +929,36 @@ function dev = crossingAngleLocal(xyarray, theta1, theta2_0, ss, dir, max_search
     % Bisection for the smallest deviation angle (0..max_search) by which
     % rotor2 can be turned away from theta2_0, with rotor1 held fixed at
     % theta1, before the gap first reaches zero (interference).
+    %
+    % The gap vs. deviation curve is not monotonic in general — it can dip
+    % negative and recover before reaching max_search — so checking only
+    % the endpoint would miss interior interference. Scan outward in
+    % 1-degree steps to find the first bracket containing a sign change,
+    % then bisect within that bracket.
     tol = 1e-3;
+    scan_step = 1.0;
     lo = 0;
-    hi = max_search;
-    gap_hi = pairGapLocal(xyarray, theta1, theta2_0 + dir*hi, ss);
-    if gap_hi > 0
-        % No interference within a half lobe pitch of deviation.
+    hi = [];
+    n_steps = ceil(max_search / scan_step);
+    for i = 1:n_steps
+        d = min(i * scan_step, max_search);
+        gap = pairGapLocal(xyarray, theta1, theta2_0 + dir*d, ss);
+        if gap <= 0
+            hi = d;
+            break;
+        end
+        lo = d;
+        if d >= max_search
+            break;
+        end
+    end
+
+    if isempty(hi)
+        % No sign change found anywhere in [0, max_search].
         dev = max_search;
         return;
     end
+
     while (hi - lo) > tol
         mid = (lo + hi) / 2;
         if pairGapLocal(xyarray, theta1, theta2_0 + dir*mid, ss) > 0

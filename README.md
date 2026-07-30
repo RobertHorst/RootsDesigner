@@ -1,4 +1,4 @@
-Latest stable release: v0.3.1
+Latest stable release: v0.3.2
 
 RootsDesigner for generating graphs and tables for analyzing a family of Roots 
 blower profiles. The program also optionally creates csv files defining splines that 
@@ -13,6 +13,12 @@ instructions.
 v0.3.1 fixes a Windows-only crash on startup (PySide6's Qt DLLs were not being found on
 PC); no functional changes. Confirmed working on macOS, Windows, and expected to work
 on Linux.
+
+v0.3.2 fixes a bug in Max Angle Deviation: for some geometries (most visibly 2-lobe
+rotors) the search for the interference angle only checked the far end of its search
+window, so it could report the search boundary (e.g. 90 deg) instead of the true,
+much smaller crossing angle. Affects both the MATLAB and Python versions; other
+outputs (Min Gap, Avg Gap, etc.) were not affected.
 
 For more information see:
 Horst, Robert. "A family of high-flow Roots blower profiles based on non-circular gears 

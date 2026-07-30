@@ -76,8 +76,8 @@ from roots_profile import flow_convert, lobe_rmax_from_ss, roots_compute, rotate
 
 APP_NAME = "Roots Profile Designer"
 APP_VENDOR = "Horst Tech LLC"
-VERSION = "0.3.1"
-VERSION_DATE = "2026-07-27"
+VERSION = "0.3.2"
+VERSION_DATE = "2026-07-30"
 
 RESULT_NAMES = [
     "Shaft Spacing", "Lobe Rmax", "Lobe Rmin", "Lobe Width",

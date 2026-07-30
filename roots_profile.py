@@ -117,15 +117,32 @@ def find_min_gap(xyarray, nodes, ss):
     return min_gap, avg_gap, gaparray, ang_at_min
 
 
-def crossing_angle(xyarray, theta1, theta2_0, ss, direction, max_search, tol=1e-3):
+def crossing_angle(xyarray, theta1, theta2_0, ss, direction, max_search, tol=1e-3, scan_step=1.0):
     """Bisection for the smallest deviation angle (0..max_search) by which
     rotor2 can be turned away from theta2_0, with rotor1 held fixed at
     theta1, before the gap first reaches zero (interference).
+
+    The gap vs. deviation curve is not monotonic in general — it can dip
+    negative and recover before reaching max_search — so checking only the
+    endpoint would miss interior interference. Scan outward in scan_step
+    increments to find the first bracket containing a sign change, then
+    bisect within that bracket.
     """
-    lo, hi = 0.0, max_search
-    gap_hi = pair_gap(xyarray, theta1, theta2_0 + direction * hi, ss)
-    if gap_hi > 0:
-        # No interference within a half lobe pitch of deviation.
+    lo = 0.0
+    hi = None
+    n_steps = int(np.ceil(max_search / scan_step))
+    for i in range(1, n_steps + 1):
+        dev = min(i * scan_step, max_search)
+        gap = pair_gap(xyarray, theta1, theta2_0 + direction * dev, ss)
+        if gap <= 0:
+            hi = dev
+            break
+        lo = dev
+        if dev >= max_search:
+            break
+
+    if hi is None:
+        # No sign change found anywhere in [0, max_search].
         return max_search
 
     while (hi - lo) > tol:
