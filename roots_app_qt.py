@@ -1,11 +1,14 @@
 """PySide6 GUI port of RootsProfileApp.m — full feature parity with the
-MATLAB App Designer app: mode toggle (shaft spacing / shell diameter),
-Interactive tab (parameters, Compute, Export Spline, 12-row Results panel,
+MATLAB App Designer app: mode toggle (shaft spacing / shell diameter;
+starts in Set Shell Diameter), Return to Defaults button,
+Interactive tab (parameters, Compute, Export Spline, 15-row Results panel,
 six-angle rotor mesh plot), and Batch tab (editable parameter table, Load
 Defaults, Add/Delete row, Run All, Plot marked rows, Export CSV).
 
-The math is unchanged from roots_profile.py (the vectorized NumPy/SciPy
-core) — this module only adds the GUI.
+The math lives in roots_profile.py (the vectorized NumPy/SciPy core) —
+this module only adds the GUI. Settings shared by both tabs (above the
+tabs): profile method (Averaged or Noslip rolling), units (SI or Imperial),
+rotor speed (RPM) and discharge-opening diameter for the outlet velocity.
 
 Usage:
     python3 roots_app_qt.py
@@ -14,24 +17,17 @@ Copyright 2026, Robert Horst, Horst Tech LLC
 """
 
 import csv
-import importlib.util
-import os
 import sys
 
-# On Windows, PySide6's bundled Qt DLLs aren't found via PATH alone — register
-# the package directory as a DLL search path before importing any PySide6
-# submodules. No-op on macOS/Linux, where this isn't needed.
-if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
-    try:
-        spec = importlib.util.find_spec("PySide6")
-        if spec and spec.origin:
-            pyside_dir = os.path.dirname(spec.origin)
-            if os.path.exists(pyside_dir):
-                os.add_dll_directory(pyside_dir)
-    except Exception:
-        pass
+import numpy as np
 
-import PySide6  # noqa: F401 — import top-level package before submodules
+try:
+    # matplotlib >= 3.5: unified Qt backend (works with PySide6/PyQt6/PySide2/PyQt5)
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+except ImportError:
+    # matplotlib < 3.5: only the Qt5-named backend module exists
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -48,6 +44,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMainWindow,
+    QScrollArea,
+    QFrame,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -59,37 +57,42 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-os.environ.setdefault("QT_API", "pyside6")
-
-import numpy as np
-from matplotlib.figure import Figure
-try:
-    # matplotlib >= 3.5: unified Qt backend (works with PySide6/PyQt6/PySide2/PyQt5)
-    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-except ImportError:
-    # matplotlib < 3.5: only the Qt5-named backend module exists
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-
-from scipy.optimize import brentq
-from roots_profile import flow_convert, lobe_rmax_from_ss, roots_compute, rotate_shift
+from roots_profile import (
+    Cancelled,
+    METHODS,
+    flow_from_cmm,
+    flow_units,
+    INPUT_DEFAULTS,
+    INPUT_KINDS,
+    design_compute,
+    format_results,
+    rotate_shift,
+    velocity_from_mps,
+    velocity_units,
+)
 
 APP_NAME = "Roots Profile Designer"
 APP_VENDOR = "Horst Tech LLC"
-VERSION = "0.3.2"
-VERSION_DATE = "2026-07-30"
+VERSION = "0.4.0"
+VERSION_DATE = "2026-11-20"
 
-RESULT_NAMES = [
-    "Shaft Spacing", "Lobe Rmax", "Lobe Rmin", "Lobe Width",
-    "Shell Diameter", "Area Efficiency", "Lambda",
-    "Min Gap", "Avg Gap", "Max Angle Dev", "Flow Loss", "Flow Net",
-]
+N_RESULT_ROWS = 17  # rows returned by roots_profile.format_results
 
 BATCH_INPUT_HEADERS = ["Plot?", "Lobes", "ex", "offset", "rotor_H", "shell_gap", "ss", "points"]
 BATCH_RESULT_HEADERS = [
-    "SS", "Rmax", "Rmin", "Width", "Shell_D", "Area_Eff",
-    "Flow_Loss", "Flow_Net", "Min_Gap", "Avg_Gap", "Max_Angle_Dev", "Lambda",
+    "Offset", "Min_Gap", "Avg_Gap", "Max_Angle_Dev",
+    "SS", "Shell_D", "Rmax", "Rmin", "Width", "Lambda_r", "Lambda_w",
+    "Area_Eff", "Velocity", "Flow_Loss", "Flow_Net",
 ]
+# Columns that are meaningless (shown as 0, in red) when the lobes interfere.
+BATCH_BAD_COLS = {1, 2, 3, 12, 13, 14}
+BATCH_KIND_COL = {"min_gap": 1, "max_angle_dev": 3}
+BATCH_INPUT_COL_NAMES = {"offset": "offset", "min_gap": "min_gap",
+                         "max_angle_dev": "max_angle_dev"}
+INPUT_FIELD_RANGES = {"offset": (0.01, 1000.0, 3), "min_gap": (0.01, 1000.0, 3),
+                      "max_angle_dev": (0.01, 90.0, 3)}
+RED = "#D92626"
+BLUE = "#1A4DB2"
 
 _SG = 2
 DEFAULT_BATCH_ROWS = [
@@ -115,6 +118,27 @@ DEFAULT_BATCH_ROWS = [
     (5, 0.300, 4.30, 100, _SG, 80.4, 1001),
 ]
 
+# Batch defaults in Set Shell Diameter mode: Table 3 of the paper
+# (130 mm housing, 2 mm shell gap; column 6 is the shell diameter).
+DEFAULT_BATCH_ROWS_SD = [
+    (2, 0.000, 1.00, 100, _SG, 130, 1001),
+    (3, 0.000, 1.00, 100, _SG, 130, 1001),
+    (4, 0.000, 1.00, 100, _SG, 130, 1001),
+    (5, 0.000, 1.00, 100, _SG, 130, 1001),
+    (2, 0.245, 2.42, 100, _SG, 130, 1001),
+    (3, 0.245, 2.72, 100, _SG, 130, 1001),
+    (4, 0.245, 3.06, 100, _SG, 130, 1001),
+    (5, 0.245, 3.39, 100, _SG, 130, 1001),
+]
+
+# Start-up values restored by "Return to Defaults".
+DEFAULTS = dict(
+    mode="sd", shell_d=130.0, ss=80.4, method="averaged", rpm=1000.0,
+    input_kind="offset",
+    outlet_d=51.0, lobes=3, ex=0.245, offset=2.72, rotor_H=100.0,
+    shellgap=2.0, points="1001",
+)
+
 PALETTE = [
     (0.15, 0.35, 0.70), (0.85, 0.25, 0.15), (0.20, 0.65, 0.30),
     (0.85, 0.55, 0.10), (0.55, 0.25, 0.70), (0.10, 0.60, 0.65),
@@ -122,45 +146,34 @@ PALETTE = [
 ]
 
 
-def _solve_ss_for_shell_d(nodes, ex, offset, shellgap, shell_d_target, points):
-    """Solve for shaft spacing that yields the target shell diameter."""
-    target_rmax = shell_d_target / 2 - shellgap
-    if target_rmax <= 0:
-        raise ValueError("Shell diameter too small for shell gap.")
-
-    def f(ss_val):
-        return lobe_rmax_from_ss(nodes, ex, offset, ss_val, points) - target_rmax
-
-    ss_lo = max(2 * offset + 1, 5)
-    ss_hi = shell_d_target * 2
-    return brentq(f, ss_lo, ss_hi)
-
-
 class ComputeWorker(QThread):
     """Runs one rootsCompute (with optional shaft-spacing solve) off the UI thread."""
 
-    finished = Signal(dict)
+    # (Named so they do not hide QThread.finished, which the window uses to
+    # know when the thread has really stopped.)
+    computed = Signal(dict)
     failed = Signal(str)
 
     def __init__(self, params, parent=None):
         super().__init__(parent)
         self.params = params
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         p = self.params
         try:
-            if p["mode"] == "sd":
-                ss = _solve_ss_for_shell_d(
-                    p["nodes"], p["ex"], p["offset"], p["shellgap"],
-                    p["ss_or_shelld"], p["points"])
-            else:
-                ss = p["ss_or_shelld"]
-
-            r = roots_compute(p["nodes"], p["ex"], p["offset"], p["rotor_H"],
-                               p["shellgap"], ss, p["points"])
-            r["ss"] = ss
-            r["nodes"] = p["nodes"]
-            self.finished.emit(r)
+            r = design_compute(p["nodes"], p["ex"], p["input_kind"],
+                               p["input_value"], p["rotor_H"], p["shellgap"],
+                               p["mode"], p["ss_or_shelld"], p["points"],
+                               method=p["method"], rpm=p["rpm"],
+                               outlet_d=p["outlet_d"],
+                               cancel=lambda: self._cancelled)
+            self.computed.emit(r)
+        except Cancelled:
+            pass
         except Exception as exc:  # noqa: BLE001 — surface any failure to the UI
             self.failed.emit(str(exc))
 
@@ -168,14 +181,15 @@ class ComputeWorker(QThread):
 class BatchWorker(QThread):
     """Runs a list of parameter sets sequentially, reporting per-row progress."""
 
-    rowDone = Signal(int, object)  # row index, result dict or None on failure
+    rowDone = Signal(int, object)  # row index, result dict or error message
     progress = Signal(int, int)  # completed, total
-    finished = Signal()
+    # Completion is QThread.finished (emitted after run() has returned).
 
-    def __init__(self, rows, mode, parent=None):
+    def __init__(self, rows, mode, settings, parent=None):
         super().__init__(parent)
-        self.rows = rows  # list of dicts: nodes, ex, offset, rotor_H, shellgap, col6, points
+        self.rows = rows  # list of dicts: nodes, ex, input, rotor_H, shellgap, col6, points
         self.mode = mode
+        self.settings = settings  # dict: method, rpm, outlet_d, input_kind
         self._cancelled = False
 
     def cancel(self):
@@ -187,28 +201,26 @@ class BatchWorker(QThread):
             if self._cancelled:
                 break
             try:
-                if self.mode == "sd":
-                    ss = _solve_ss_for_shell_d(
-                        row["nodes"], row["ex"], row["offset"], row["shellgap"],
-                        row["col6"], row["points"])
-                else:
-                    ss = row["col6"]
-                r = roots_compute(row["nodes"], row["ex"], row["offset"],
-                                   row["rotor_H"], row["shellgap"], ss, row["points"])
-                r["ss"] = ss
-                r["nodes"] = row["nodes"]
+                st = self.settings
+                r = design_compute(row["nodes"], row["ex"], st["input_kind"],
+                                   row["input"], row["rotor_H"], row["shellgap"],
+                                   self.mode, row["col6"], row["points"],
+                                   method=st["method"], rpm=st["rpm"],
+                                   outlet_d=st["outlet_d"],
+                                   cancel=lambda: self._cancelled)
                 self.rowDone.emit(i, r)
-            except Exception:  # noqa: BLE001 — mark row as failed, keep going
-                self.rowDone.emit(i, None)
+            except Cancelled:
+                break
+            except Exception as exc:  # noqa: BLE001 — mark row as failed, keep going
+                self.rowDone.emit(i, str(exc))
             self.progress.emit(i + 1, n)
-        self.finished.emit()
 
 
 class RootsProfileWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME}  v{VERSION}  —  {APP_VENDOR}")
-        self.resize(1460, 870)
+        self.resize(1460, 920)
 
         self.last_xy = None
         self.last_nodes = 3
@@ -234,16 +246,23 @@ class RootsProfileWindow(QMainWindow):
         main_layout = QHBoxLayout(central)
 
         left_widget = QWidget()
-        left_widget.setMinimumWidth(420)
-        left_widget.setMaximumWidth(460)
         left_panel = QVBoxLayout(left_widget)
-        main_layout.addWidget(left_widget, 0)
+        # Scrollable, so the Results panel is never cut off on small screens.
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left_widget)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setMinimumWidth(440)
+        left_scroll.setMaximumWidth(480)
+        main_layout.addWidget(left_scroll, 0)
 
         # --- Mode toggle -------------------------------------------------
         mode_row = QHBoxLayout()
         self.ss_radio = QRadioButton("Set Shaft Spacing")
         self.sd_radio = QRadioButton("Set Shell Diameter")
-        self.ss_radio.setChecked(True)
+        self.sd_radio.setChecked(DEFAULTS["mode"] == "sd")
+        self.ss_radio.setChecked(DEFAULTS["mode"] != "sd")
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.ss_radio)
         self.mode_group.addButton(self.sd_radio)
@@ -251,7 +270,69 @@ class RootsProfileWindow(QMainWindow):
         mode_row.addWidget(self.ss_radio)
         mode_row.addWidget(self.sd_radio)
         mode_row.addStretch()
+        self.reset_btn = QPushButton("Return to Defaults")
+        self.reset_btn.setToolTip(
+            "Set Shell Diameter mode (130 mm), 1000 RPM, rotor height 100 mm,\n"
+            "Averaged method and the default 3-lobe parameters.\n"
+            "The Units choice is kept.")
+        self.reset_btn.clicked.connect(self._return_to_defaults)
+        mode_row.addWidget(self.reset_btn)
         left_panel.addLayout(mode_row)
+
+        # --- Settings shared by both tabs -------------------------------
+        settings_box = QGroupBox("Settings")
+        sform = QFormLayout(settings_box)
+        sform.setVerticalSpacing(3)
+        sform.setContentsMargins(8, 4, 8, 4)
+
+        self.method_combo = QComboBox()
+        for key, label in METHODS.items():
+            self.method_combo.addItem(label, key)
+        self.method_combo.setCurrentIndex(0)  # Averaged (paper Eqs 5-6)
+        self.method_combo.setToolTip(
+            "Averaged: fixed-ratio construction of the paper (default).\n"
+            "Noslip rolling: circle rolls without slip on the pitch curve.")
+        sform.addRow("Profile Method", self.method_combo)
+
+        self.input_combo = QComboBox()
+        for key, (label, unit) in INPUT_KINDS.items():
+            self.input_combo.addItem(f"{label} ({unit})", key)
+        self.input_combo.setToolTip(
+            "Which clearance value you enter. The other two are computed:\n"
+            "with Min Gap or Max Angle Dev the offset is solved for.")
+        sform.addRow("Design Input", self.input_combo)
+
+        self.units_combo = QComboBox()
+        self.units_combo.addItems(["SI", "Imperial"])
+        self.units_combo.setCurrentText("SI")
+        self.units_combo.setToolTip(
+            "SI: flow in CMM (m^3/min), velocity in m/s.\n"
+            "Imperial: flow in CFM, velocity in ft/min.\n"
+            "Dimensions are always entered in mm.")
+        sform.addRow("Units", self.units_combo)
+
+        self.rpm_field = QDoubleSpinBox()
+        self.rpm_field.setRange(1, 100000)
+        self.rpm_field.setDecimals(0)
+        self.rpm_field.setSingleStep(100)
+        self.rpm_field.setValue(1000)
+        sform.addRow("Rotor Speed (RPM)", self.rpm_field)
+
+        self.outlet_field = QDoubleSpinBox()
+        self.outlet_field.setRange(1, 2000)
+        self.outlet_field.setDecimals(1)
+        self.outlet_field.setValue(51.0)
+        self.outlet_field.setToolTip(
+            "Diameter of the discharge opening, used to convert net flow\n"
+            "to mean outlet velocity.")
+        sform.addRow("Outlet Diameter (mm)", self.outlet_field)
+
+        self.method_combo.currentIndexChanged.connect(self._mark_modified)
+        self.input_combo.currentIndexChanged.connect(self._on_input_kind_changed)
+        self.units_combo.currentTextChanged.connect(self._mark_modified)
+        self.rpm_field.valueChanged.connect(self._mark_modified)
+        self.outlet_field.valueChanged.connect(self._mark_modified)
+        left_panel.addWidget(settings_box)
 
         # --- Tabs ----------------------------------------------------------
         self.tabs = QTabWidget()
@@ -275,6 +356,8 @@ class RootsProfileWindow(QMainWindow):
         # --- Parameters ---
         params_box = QGroupBox("Parameters")
         form = QFormLayout(params_box)
+        form.setVerticalSpacing(3)
+        form.setContentsMargins(8, 4, 8, 4)
 
         self.lobes_spin = QSpinBox()
         self.lobes_spin.setRange(2, 10)
@@ -288,26 +371,29 @@ class RootsProfileWindow(QMainWindow):
         self.ex_field.setValue(0.245)
         form.addRow("Eccentricity (ex)", self.ex_field)
 
+        # Holds the offset, min gap or max angle dev (Settings > Design Input)
         self.offset_field = QDoubleSpinBox()
-        self.offset_field.setRange(0.01, 15)
-        self.offset_field.setDecimals(2)
-        self.offset_field.setValue(2.72)
-        form.addRow("Offset (mm)", self.offset_field)
+        lo, hi, dec = INPUT_FIELD_RANGES["offset"]
+        self.offset_field.setRange(lo, hi)
+        self.offset_field.setDecimals(dec)
+        self.offset_field.setValue(INPUT_DEFAULTS["offset"])
+        self.offset_label = QLabel("Offset (mm)")
+        form.addRow(self.offset_label, self.offset_field)
 
         self.rotor_h_field = QDoubleSpinBox()
-        self.rotor_h_field.setRange(1, 1000)
+        self.rotor_h_field.setRange(1, 1e6)
         self.rotor_h_field.setDecimals(1)
         self.rotor_h_field.setValue(100)
         form.addRow("Rotor Height (mm)", self.rotor_h_field)
 
         self.shellgap_field = QDoubleSpinBox()
-        self.shellgap_field.setRange(0, 20)
+        self.shellgap_field.setRange(0, 1e4)
         self.shellgap_field.setDecimals(1)
         self.shellgap_field.setValue(2)
         form.addRow("Shell Gap (mm)", self.shellgap_field)
 
         self.ss_field = QDoubleSpinBox()
-        self.ss_field.setRange(10, 300)
+        self.ss_field.setRange(1, 1e6)
         self.ss_field.setDecimals(1)
         self.ss_field.setValue(80.4)
         self.switch_label = QLabel("Shaft Spacing (mm)")
@@ -318,16 +404,10 @@ class RootsProfileWindow(QMainWindow):
         self.points_combo.setCurrentText("1001")
         form.addRow("Points", self.points_combo)
 
-        self.units_combo = QComboBox()
-        self.units_combo.addItems(["CFM", "CMM", "CMH"])
-        self.units_combo.setCurrentText("CMM")
-        form.addRow("Flow Units (@ 1K RPM)", self.units_combo)
-
         for w in (self.lobes_spin, self.ex_field, self.offset_field,
                   self.rotor_h_field, self.shellgap_field, self.ss_field):
             w.valueChanged.connect(self._mark_modified)
         self.points_combo.currentTextChanged.connect(self._mark_modified)
-        self.units_combo.currentTextChanged.connect(self._mark_modified)
 
         layout.addWidget(params_box)
 
@@ -350,17 +430,18 @@ class RootsProfileWindow(QMainWindow):
         # --- Results panel ---
         results_box = QGroupBox("Results")
         grid = QGridLayout(results_box)
+        grid.setVerticalSpacing(1)
+        grid.setContentsMargins(8, 4, 8, 4)
         self.result_name_labels = []
         self.result_value_labels = []
-        for i, name in enumerate(RESULT_NAMES):
-            name_lbl = QLabel(name)
-            name_lbl.setStyleSheet("color: #595959;")
-            val_lbl = QLabel("—")
-            val_lbl.setStyleSheet("font-weight: bold;")
+        for i in range(N_RESULT_ROWS):
+            name_lbl = QLabel("")
+            val_lbl = QLabel("")
             grid.addWidget(name_lbl, i, 0)
             grid.addWidget(val_lbl, i, 1)
             self.result_name_labels.append(name_lbl)
             self.result_value_labels.append(val_lbl)
+        self._clear_results()
         layout.addWidget(results_box)
         layout.addStretch()
         return tab
@@ -391,7 +472,7 @@ class RootsProfileWindow(QMainWindow):
         layout.addLayout(btn_row1)
 
         btn_row2 = QHBoxLayout()
-        run_btn = QPushButton("Run All")
+        self.run_btn = run_btn = QPushButton("Run All")
         run_btn.setStyleSheet("font-weight: bold; background-color: #38993D; color: white;")
         run_btn.clicked.connect(self._run_all)
         btn_row2.addWidget(run_btn)
@@ -415,6 +496,7 @@ class RootsProfileWindow(QMainWindow):
         layout.addWidget(self.batch_results_table, 1)
 
         self.batch_status_label = QLabel("Load defaults or add rows to begin.")
+        self.batch_status_label.setWordWrap(True)
         layout.addWidget(self.batch_status_label)
 
         return tab
@@ -423,8 +505,83 @@ class RootsProfileWindow(QMainWindow):
     #  Mode toggle / status helpers
     # ------------------------------------------------------------------
     def _mark_modified(self, *_args):
+        if not hasattr(self, "status_label"):
+            return
         self.status_label.setText("Modified")
         self.status_label.setStyleSheet("color: #CC8000;")
+
+    def _return_to_defaults(self):
+        d = DEFAULTS
+        self.method_combo.setCurrentIndex(self.method_combo.findData(d["method"]))
+        self.rpm_field.setValue(d["rpm"])
+        self.outlet_field.setValue(d["outlet_d"])
+        self.lobes_spin.setValue(d["lobes"])
+        self.ex_field.setValue(d["ex"])
+        self.input_combo.setCurrentIndex(self.input_combo.findData(d["input_kind"]))
+        self.offset_field.setValue(d["offset"])
+        self.rotor_h_field.setValue(d["rotor_H"])
+        self.shellgap_field.setValue(d["shellgap"])
+        self.points_combo.setCurrentText(d["points"])
+        radio = self.sd_radio if d["mode"] == "sd" else self.ss_radio
+        if radio.isChecked():
+            self._on_mode_changed()  # still reset the field and clear results
+        else:
+            radio.setChecked(True)  # triggers _on_mode_changed
+        self.status_label.setText("Defaults restored.")
+        self.status_label.setStyleSheet("color: #595959;")
+
+    def _input_kind(self):
+        return self.input_combo.currentData()
+
+    def _on_input_kind_changed(self, *_args):
+        kind = self._input_kind()
+        label, unit = INPUT_KINDS[kind]
+        lo, hi, dec = INPUT_FIELD_RANGES[kind]
+        self.offset_label.setText(f"{label} ({unit})")
+        self.offset_field.setRange(lo, hi)
+        self.offset_field.setDecimals(dec)
+        self.offset_field.setValue(INPUT_DEFAULTS[kind])
+        self.batch_input_table.setHorizontalHeaderItem(
+            3, QTableWidgetItem(BATCH_INPUT_COL_NAMES[kind]))
+        # Column 3 of the batch table changes meaning: clear the batch data.
+        self.batch_input_table.setRowCount(0)
+        self.batch_results_table.setRowCount(0)
+        self.batch_xy_cache.clear()
+        self.batch_node_cache.clear()
+        self.batch_ss_cache.clear()
+        self._clear_results()
+        self._mark_modified()
+
+    def _result_layout(self):
+        """Row names and styles of the Results panel, with blank values."""
+        blank = dict(offset=0, min_gap=0, avg_gap=0, max_angle_dev=0,
+                     shell_d=0, lobe_rmax=0, lobe_rmin=0, lobe_w=0,
+                     lambda_r=0, lambda_w=0, area_eff=0, CMM_loss=0,
+                     CMM_net=0, velocity_mps=0, rpm=self.rpm_field.value())
+        return format_results(blank, 0, self.units_combo.currentText(),
+                              self._input_kind(),
+                              "sd" if self._is_sd_mode() else "ss")
+
+    def _show_results(self, rows):
+        for i, ((name, val, style), nlbl, vlbl) in enumerate(
+                zip(rows, self.result_name_labels, self.result_value_labels)):
+            nlbl.setText(name)
+            vlbl.setText(val)
+            top = "" if i == 0 else " padding-top: 4px;"
+            if style == "header":
+                nlbl.setStyleSheet(f"font-weight: bold; color: #222222;{top}")
+                vlbl.setStyleSheet("")
+                continue
+            nlbl.setStyleSheet("color: %s; padding-left: 10px;"
+                               % (BLUE if style == "solved" else "#595959"))
+            color = {"solved": BLUE, "bad": RED}.get(style, "black")
+            size = " font-size: 14px;" if name == "Flow Net" else ""
+            vlbl.setStyleSheet(f"font-weight: bold; color: {color};{size}")
+
+    def _clear_results(self):
+        rows = [(n, "" if s == "header" else "—", s)
+                for n, _, s in self._result_layout()]
+        self._show_results(rows)
 
     def _is_sd_mode(self):
         return self.sd_radio.isChecked()
@@ -432,19 +589,16 @@ class RootsProfileWindow(QMainWindow):
     def _on_mode_changed(self):
         if self._is_sd_mode():
             self.switch_label.setText("Shell Diameter (mm)")
-            self.ss_field.setRange(10, 1000)
-            self.ss_field.setValue(130)
+            self.ss_field.setRange(1, 1e6)
+            self.ss_field.setValue(DEFAULTS["shell_d"])
             self.batch_input_table.setHorizontalHeaderItem(6, QTableWidgetItem("shell_d"))
-            self.defaults_btn.setEnabled(False)
         else:
             self.switch_label.setText("Shaft Spacing (mm)")
-            self.ss_field.setRange(10, 300)
-            self.ss_field.setValue(80.4)
+            self.ss_field.setRange(1, 1e6)
+            self.ss_field.setValue(DEFAULTS["ss"])
             self.batch_input_table.setHorizontalHeaderItem(6, QTableWidgetItem("ss"))
-            self.defaults_btn.setEnabled(True)
 
-        for lbl in self.result_value_labels:
-            lbl.setText("—")
+        self._clear_results()
 
         self.batch_input_table.setRowCount(0)
         self.batch_results_table.setRowCount(0)
@@ -460,12 +614,22 @@ class RootsProfileWindow(QMainWindow):
         return {
             "nodes": self.lobes_spin.value(),
             "ex": self.ex_field.value(),
-            "offset": self.offset_field.value(),
+            "input_kind": self._input_kind(),
+            "input_value": self.offset_field.value(),
             "rotor_H": self.rotor_h_field.value(),
             "shellgap": self.shellgap_field.value(),
             "ss_or_shelld": self.ss_field.value(),
             "points": int(self.points_combo.currentText()),
             "mode": "sd" if self._is_sd_mode() else "ss",
+            **self._gather_settings(),
+        }
+
+    def _gather_settings(self):
+        return {
+            "input_kind": self._input_kind(),
+            "method": self.method_combo.currentData(),
+            "rpm": self.rpm_field.value(),
+            "outlet_d": self.outlet_field.value(),
         }
 
     def _on_compute_clicked(self):
@@ -475,12 +639,32 @@ class RootsProfileWindow(QMainWindow):
         self.status_label.setStyleSheet("color: #595959;")
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
-        self._compute_worker = ComputeWorker(params)
-        self._compute_worker.finished.connect(self._on_compute_finished)
-        self._compute_worker.failed.connect(self._on_compute_failed)
-        self._compute_worker.finished.connect(self._compute_worker.deleteLater)
-        self._compute_worker.failed.connect(self._compute_worker.deleteLater)
-        self._compute_worker.start()
+        worker = ComputeWorker(params)
+        worker.computed.connect(self._on_compute_finished)
+        worker.failed.connect(self._on_compute_failed)
+        # Delete the thread object only once the thread has stopped.
+        worker.finished.connect(self._on_compute_thread_done)
+        self._compute_worker = worker
+        worker.start()
+
+    def _on_compute_thread_done(self):
+        worker = self.sender()
+        if worker is self._compute_worker:
+            self._compute_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def closeEvent(self, event):
+        # Stop worker threads before the window (and Python) goes away: a
+        # QThread object destroyed while its thread still runs aborts the
+        # whole process.
+        if self._batch_worker is not None:
+            self._batch_worker.cancel()
+            self._batch_worker.wait()
+        if self._compute_worker is not None:
+            self._compute_worker.cancel()
+            self._compute_worker.wait()
+        super().closeEvent(event)
 
     def _on_compute_finished(self, r):
         QApplication.restoreOverrideCursor()
@@ -489,38 +673,40 @@ class RootsProfileWindow(QMainWindow):
         nodes = r["nodes"]
         ss = r["ss"]
         units = self.units_combo.currentText()
-        fl = flow_convert(r["CFM_loss"], units)
-        fn = flow_convert(r["CFM_net"], units)
 
-        vals = [
-            f"{ss:.2f} mm", f"{r['lobe_rmax']:.1f} mm", f"{r['lobe_rmin']:.1f} mm",
-            f"{r['lobe_w']:.1f} mm", f"{r['shell_d']:.1f} mm", f"{r['area_eff']:.3f}",
-            f"{r['lamb']:.3f}", f"{r['min_gap']:.2f} mm", f"{r['avg_gap']:.2f} mm",
-            f"{r['max_angle_dev']:.3f} deg", f"{fl:.2f} {units}", f"{fn:.2f} {units}",
-        ]
-        for lbl, v in zip(self.result_value_labels, vals):
-            lbl.setText(v)
-
-        if self._is_sd_mode():
-            self.result_name_labels[0].setStyleSheet("color: #1A4DB2;")
-            self.result_value_labels[0].setStyleSheet("font-weight: bold; color: #1A4DB2;")
-        else:
-            self.result_name_labels[0].setStyleSheet("color: #595959;")
-            self.result_value_labels[0].setStyleSheet("font-weight: bold; color: black;")
+        self._show_results(format_results(r, ss, units, r["input_kind"],
+                                          r["mode"]))
 
         self.last_xy = r["xy"]
         self.last_nodes = nodes
         self.last_ss = ss
         self._plot_profiles(r["xy"], nodes, ss)
 
-        self.status_label.setText("Done.")
-        self.status_label.setStyleSheet("color: #339933;")
+        self.status_label.setToolTip(r.get("solve_note") or "")
+        if r["interfere"]:
+            self.status_label.setText("Lobes interfere.")
+            self.status_label.setStyleSheet(f"color: {RED}; font-weight: bold;")
+        elif r.get("solve_note"):
+            self.status_label.setText("Target not exact (see message)")
+            self.status_label.setStyleSheet(f"color: {RED}; font-weight: bold;")
+            QMessageBox.information(self, "Compute", r["solve_note"])
+        else:
+            self.status_label.setText("Done.")
+            self.status_label.setStyleSheet("color: #339933;")
 
     def _on_compute_failed(self, message):
         QApplication.restoreOverrideCursor()
         self.compute_btn.setEnabled(True)
-        self.status_label.setText(f"Error: {message}")
-        self.status_label.setStyleSheet("color: #D92626;")
+        # No valid result: blank every value, in red, so nothing from an
+        # earlier run can be mistaken for this one.
+        rows = [(n, "" if s == "header" else "\u2014", s if s == "header" else "bad")
+                for n, _, s in self._result_layout()]
+        self._show_results(rows)
+        self.last_xy = None
+        self.status_label.setText("Error (see message)")
+        self.status_label.setToolTip(message)
+        self.status_label.setStyleSheet(f"color: {RED}; font-weight: bold;")
+        QMessageBox.warning(self, "Compute", message)
 
     # ------------------------------------------------------------------
     #  Plotting
@@ -648,17 +834,27 @@ class RootsProfileWindow(QMainWindow):
         self.batch_input_table.blockSignals(False)
 
     def _load_defaults(self):
-        self.batch_input_table.setRowCount(len(DEFAULT_BATCH_ROWS))
-        for i, row_vals in enumerate(DEFAULT_BATCH_ROWS):
-            self._set_batch_row(i, i == len(DEFAULT_BATCH_ROWS) - 1, row_vals)
-        self.batch_status_label.setText("20 default rows loaded.")
+        if self._is_sd_mode():
+            rows, what = DEFAULT_BATCH_ROWS_SD, "130 mm housing (paper Table 3)"
+        else:
+            rows, what = DEFAULT_BATCH_ROWS, "80.4 mm shaft spacing (paper Table 1)"
+        kind = self._input_kind()
+        if kind != "offset":
+            # Same cases, with the chosen design input in column 3.
+            rows = [r[:2] + (INPUT_DEFAULTS[kind],) + r[3:] for r in rows]
+            label, unit = INPUT_KINDS[kind]
+            what += f", {label} {INPUT_DEFAULTS[kind]:g} {unit}"
+        self.batch_input_table.setRowCount(len(rows))
+        for i, row_vals in enumerate(rows):
+            self._set_batch_row(i, i == len(rows) - 1, row_vals)
+        self.batch_status_label.setText(f"{len(rows)} default rows loaded: {what}.")
 
     def _add_row(self):
         p = self._gather_interactive_params()
         row = self.batch_input_table.rowCount()
         self.batch_input_table.insertRow(row)
         self._set_batch_row(row, False, [
-            p["nodes"], p["ex"], p["offset"], p["rotor_H"],
+            p["nodes"], p["ex"], p["input_value"], p["rotor_H"],
             p["shellgap"], p["ss_or_shelld"], p["points"],
         ])
         self.batch_status_label.setText("Row added.")
@@ -682,13 +878,15 @@ class RootsProfileWindow(QMainWindow):
             except (ValueError, AttributeError) as exc:
                 raise ValueError(f"Row {r + 1}: invalid number ({exc})") from exc
             rows.append({
-                "nodes": int(vals[0]), "ex": vals[1], "offset": vals[2],
+                "nodes": int(vals[0]), "ex": vals[1], "input": vals[2],
                 "rotor_H": vals[3], "shellgap": vals[4], "col6": vals[5],
                 "points": int(vals[6]),
             })
         return rows
 
     def _run_all(self):
+        if self._batch_worker is not None:
+            return  # a batch is already running
         if self.batch_input_table.rowCount() == 0:
             self.batch_status_label.setText("No rows. Load defaults or add rows.")
             return
@@ -709,11 +907,15 @@ class RootsProfileWindow(QMainWindow):
         self._batch_progress_dlg.setMinimumDuration(0)
 
         mode = "sd" if self._is_sd_mode() else "ss"
-        self._batch_worker = BatchWorker(rows, mode)
+        self._batch_settings = dict(self._gather_settings(),
+                                    units=self.units_combo.currentText())
+        self._batch_errors = []
+        self._batch_worker = BatchWorker(rows, mode, self._batch_settings)
         self._batch_worker.rowDone.connect(self._on_batch_row_done)
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.finished.connect(self._on_batch_finished)
         self._batch_progress_dlg.canceled.connect(self._batch_worker.cancel)
+        self.run_btn.setEnabled(False)
         self._batch_worker.start()
 
     def _on_batch_progress(self, done, total):
@@ -722,31 +924,61 @@ class RootsProfileWindow(QMainWindow):
             self._batch_progress_dlg.setValue(done)
 
     def _on_batch_row_done(self, row, r):
-        units = self.units_combo.currentText()
-        if r is None:
-            values = [float("nan")] * len(BATCH_RESULT_HEADERS)
+        units = self._batch_settings["units"]
+        if not isinstance(r, dict):
+            # Failed row: every cell says "error" in red; hover for the reason.
+            for c in range(len(BATCH_RESULT_HEADERS)):
+                item = QTableWidgetItem("error")
+                item.setForeground(QColor(RED))
+                item.setToolTip(str(r))
+                self.batch_results_table.setItem(row, c, item)
+            self._batch_errors.append(row + 1)
+            return
         else:
-            fl = flow_convert(r["CFM_loss"], units)
-            fn = flow_convert(r["CFM_net"], units)
-            values = [r["ss"], r["lobe_rmax"], r["lobe_rmin"], r["lobe_w"],
-                      r["shell_d"], r["area_eff"], fl, fn, r["min_gap"],
-                      r["avg_gap"], r["max_angle_dev"], r["lamb"]]
+            fl = flow_from_cmm(r["CMM_loss"], units)
+            fn = flow_from_cmm(r["CMM_net"], units)
+            vel = velocity_from_mps(r["velocity_mps"], units)
+            values = [r["offset"], r["min_gap"], r["avg_gap"], r["max_angle_dev"],
+                      r["ss"], r["shell_d"], r["lobe_rmax"], r["lobe_rmin"],
+                      r["lobe_w"], r["lambda_r"], r["lambda_w"], r["area_eff"],
+                      vel, fl, fn]
             self.batch_xy_cache[row] = r["xy"]
             self.batch_node_cache[row] = r["nodes"]
             self.batch_ss_cache[row] = r["ss"]
 
+        bad = r["interfere"]
+        note = r.get("solve_note")
+        kind_col = BATCH_KIND_COL.get(r["input_kind"])
         for c, v in enumerate(values):
             item = QTableWidgetItem("nan" if v != v else f"{v:.4f}")
+            if (bad and c in BATCH_BAD_COLS) or (note and c == kind_col):
+                item.setForeground(QColor(RED))
+            if note and c == kind_col:
+                item.setToolTip(note)
             self.batch_results_table.setItem(row, c, item)
+        if note:
+            self._batch_errors.append(row + 1)
 
     def _on_batch_finished(self):
+        worker, self._batch_worker = self._batch_worker, None
+        # Read before closing the progress dialog: closing it emits canceled.
+        cancelled = worker is not None and worker._cancelled
+        if worker is not None:
+            worker.deleteLater()
         if self._batch_progress_dlg is not None:
             self._batch_progress_dlg.close()
             self._batch_progress_dlg = None
+        self.run_btn.setEnabled(True)
         n = self.batch_input_table.rowCount()
-        self.batch_status_label.setText(
-            f"Done — {n} sets.  Select Plot? then press Plot.")
+        msg = f"Done — {n} sets.  Select Plot? then press Plot."
+        if cancelled:
+            msg = "Batch cancelled."
+        if self._batch_errors:
+            rows = ", ".join(str(k) for k in sorted(self._batch_errors))
+            msg = (f"Done — {n} sets. Row(s) {rows} failed or missed the "
+                   f"target (red; hover a cell for the reason).")
         self._plot_marked_profiles()
+        self.batch_status_label.setText(msg)
 
     def _on_batch_result_row_selected(self):
         rows = self.batch_results_table.selectionModel().selectedRows()
@@ -768,8 +1000,15 @@ class RootsProfileWindow(QMainWindow):
             return
 
         col6_hdr = "shell_d_input" if self._is_sd_mode() else "ss_input"
-        headers = (["Lobes", "ex", "offset", "rotor_H", "shellgap", col6_hdr, "points"]
-                   + BATCH_RESULT_HEADERS)
+        st = getattr(self, "_batch_settings", None) or dict(
+            self._gather_settings(), units=self.units_combo.currentText())
+        fu, vu = flow_units(st["units"]), velocity_units(st["units"])
+        result_hdrs = [h if h not in ("Flow_Loss", "Flow_Net", "Velocity")
+                       else f"{h}_{fu if h != 'Velocity' else vu.replace('/', '_')}"
+                       for h in BATCH_RESULT_HEADERS]
+        in_hdr = BATCH_INPUT_COL_NAMES[st["input_kind"]] + "_input"
+        headers = (["Lobes", "ex", in_hdr, "rotor_H", "shellgap", col6_hdr, "points"]
+                   + result_hdrs + ["method", "rpm", "outlet_d"])
 
         with open(path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -780,7 +1019,8 @@ class RootsProfileWindow(QMainWindow):
                 for c in range(self.batch_results_table.columnCount()):
                     item = self.batch_results_table.item(r, c)
                     out_vals.append(item.text() if item is not None else "")
-                writer.writerow(in_vals + out_vals)
+                writer.writerow(in_vals + out_vals
+                                + [METHODS[st["method"]], st["rpm"], st["outlet_d"]])
 
         self.batch_status_label.setText(f"Saved: {path}")
 
